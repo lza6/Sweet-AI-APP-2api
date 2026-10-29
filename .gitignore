@@ -1,0 +1,20 @@
+# 反编译产物（体积大，本地保留，勿提交）
+raw/
+jadx-out/
+apktool-out/
+*.apk
+
+# 日志
+*.log
+emu*.log
+jadx*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 运行时
+*.tmp
+.DS_Store

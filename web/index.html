@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sweet AI · 本地网关 Demo</title>
+<style>
+  :root{
+    --bg:#0d0b14; --panel:#171325; --panel2:#1e1930; --line:#2c2540;
+    --txt:#ece8f6; --dim:#9b93b5; --pink:#ff6fae; --violet:#8b6cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.6 -apple-system,"Segoe UI",system-ui,"Microsoft YaHei",sans-serif;
+       background:radial-gradient(1100px 600px at 15% -10%,#2a1f45 0,transparent 60%),var(--bg);
+       color:var(--txt);min-height:100vh}
+  .wrap{max-width:1080px;margin:0 auto;padding:24px 18px 60px}
+  header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+  h1{font-size:20px;margin:0;font-weight:650;letter-spacing:.3px}
+  h1 span{background:linear-gradient(90deg,var(--pink),var(--violet));
+          -webkit-background-clip:text;background-clip:text;color:transparent}
+  .tag{font-size:12px;color:var(--dim);border:1px solid var(--line);
+       padding:2px 9px;border-radius:999px;background:var(--panel)}
+  .tag.on{color:#7ff0b0;border-color:#2c5a41;background:#12291d}
+  .tag.off{color:#ffb0b0;border-color:#5a2c2c;background:#291212}
+  .grid{display:grid;grid-template-columns:1fr 320px;gap:16px}
+  @media(max-width:860px){.grid{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,var(--panel),var(--panel2));
+        border:1px solid var(--line);border-radius:16px}
+  #chat{height:min(62vh,560px);overflow-y:auto;padding:18px;display:flex;
+        flex-direction:column;gap:12px}
+  .msg{max-width:82%;padding:10px 14px;border-radius:14px;white-space:pre-wrap;
+       word-break:break-word;font-size:14.5px}
+  .me{align-self:flex-end;background:linear-gradient(135deg,#6d4bff,#a24bff);color:#fff;
+      border-bottom-right-radius:4px}
+  .ai{align-self:flex-start;background:#241d38;border:1px solid var(--line);
+      border-bottom-left-radius:4px}
+  .sys{align-self:center;font-size:12.5px;color:#ff9d9d;background:#2a1616;
+       border:1px solid #4a2424;border-radius:10px;padding:6px 12px;max-width:96%}
+  .composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--line)}
+  textarea{flex:1;resize:none;height:52px;background:#100d1a;border:1px solid var(--line);
+           border-radius:12px;color:var(--txt);padding:12px 14px;font:inherit;outline:none}
+  textarea:focus{border-color:var(--violet)}
+  button{border:0;border-radius:12px;padding:0 20px;font:inherit;font-weight:600;
+         cursor:pointer;color:#fff;background:linear-gradient(135deg,var(--pink),var(--violet))}
+  button:disabled{opacity:.5;cursor:default}
+  .side{padding:16px;display:flex;flex-direction:column;gap:14px;height:fit-content}
+  .side h3{margin:0;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--dim)}
+  .row{display:flex;justify-content:space-between;font-size:13.5px;
+       padding:6px 0;border-bottom:1px dashed #241e36}
+  .row:last-child{border:0}
+  .row b{font-weight:600;color:#fff}
+  input[type=text]{width:100%;background:#100d1a;border:1px solid var(--line);
+                   border-radius:10px;color:var(--txt);padding:9px 12px;font:inherit}
+  .kv{font-family:ui-monospace,Consolas,monospace;font-size:12px;word-break:break-all;color:#bfb6d8}
+  .chk{display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span>Sweet AI</span> 本地网关 Demo</h1>
+    <span class="tag" id="mockTag">…</span>
+    <span class="tag">POST /v1/chat/completions</span>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <div id="chat"></div>
+      <div class="composer">
+        <textarea id="input" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <button id="send">发送</button>
+      </div>
+    </div>
+
+    <div class="card side">
+      <h3>网关状态</h3>
+      <div class="row"><span>upstream</span><b id="upstream">-</b></div>
+      <div class="row"><span>health</span><b id="health">-</b></div>
+      <div class="row"><span>请求/成功/失败</span><b id="counts">-</b></div>
+      <div class="row"><span>p50 / p95 (ms)</span><b id="lat">-</b></div>
+
+      <h3>会话</h3>
+      <div class="row"><span>模型</span><b id="modelName">-</b></div>
+      <label class="chk"><input type="checkbox" id="stream" /> 流式返回 (SSE)</label>
+      <input type="text" id="sys" placeholder="system prompt（可选）" />
+
+      <h3>加密信封（本次）</h3>
+      <div class="kv" id="env">请求前这里会显示 mt / mr / md 摘要</div>
+      <div class="row"><span>耗时</span><b id="cost">-</b></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const chatEl = $('#chat');
+let history = [];
+
+function bubble(text, cls) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.textContent = text;
+  chatEl.appendChild(d);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return d;
+}
+function sysline(t){ bubble(t, 'sys'); }
+
+async function refresh() {
+  try {
+    const h = await (await fetch('/health')).json();
+    const s = await (await fetch('/stats')).json();
+    $('#mockTag').textContent = h.mock ? 'MOCK 模式' : '真实上游';
+    $('#mockTag').className = 'tag ' + (h.mock ? 'on' : 'off');
+    $('#upstream').textContent = h.upstream.replace('https://','');
+    $('#modelName').textContent = h.model;
+    $('#health').textContent = h.status;
+    $('#counts').textContent = `${s.requests} / ${s.ok} / ${s.failed}`;
+    $('#lat').textContent = `${s.p50_ms ?? '-'} / ${s.p95_ms ?? '-'}`;
+  } catch (e) {
+    $('#health').textContent = 'unreachable';
+  }
+}
+
+async function send() {
+  const text = $('#input').value.trim();
+  if (!text) return;
+  $('#input').value = '';
+  bubble(text, 'me');
+  history.push({role:'user', content:text});
+
+  const msgs = [];
+  const sys = $('#sys').value.trim();
+  if (sys) msgs.push({role:'system', content:sys});
+  msgs.push(...history);
+
+  const stream = $('#stream').checked;
+  const btn = $('#send'); btn.disabled = true;
+  const out = bubble('', 'ai');
+  const t0 = performance.now();
+
+  try {
+    const res = await fetch('/v1/chat/completions', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({model: $('#modelName').textContent, messages: msgs, stream})
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(()=>({}));
+      out.remove();
+      sysline(`上游错误 ${res.status}：${j?.error?.message || 'unknown'}`);
+      history.pop();
+    } else if (stream) {
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '', acc = '';
+      while (true) {
+        const {value, done} = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, {stream:true});
+        const parts = buf.split('\n\n'); buf = parts.pop();
+        for (const p of parts) {
+          const line = p.trim();
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          try {
+            const j = JSON.parse(payload);
+            const delta = j.choices?.[0]?.delta?.content || '';
+            acc += delta; out.textContent = acc;
+            chatEl.scrollTop = chatEl.scrollHeight;
+          } catch {}
+        }
+      }
+      history.push({role:'assistant', content:acc});
+    } else {
+      const j = await res.json();
+      const content = j.choices?.[0]?.message?.content ?? '';
+      out.textContent = content;
+      history.push({role:'assistant', content});
+    }
+    $('#cost').textContent = `${Math.round(performance.now()-t0)} ms`;
+  } catch (e) {
+    out.remove(); sysline('请求失败：' + e.message); history.pop();
+  } finally {
+    btn.disabled = false; refresh();
+  }
+}
+
+$('#send').onclick = send;
+$('#input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+refresh(); setInterval(refresh, 3000);
+</script>
+</body>
+</html>
